@@ -1,12 +1,12 @@
 """
 VaxAlert Synthetic Data Generator (SDG)
 ========================================
-Generates realistic facility-level vaccine stock time series for 30 Ethiopian
+Generates realistic facility-level vaccine stock time series for 200 Ethiopian
 health facilities, calibrated against WHO/WUENIC coverage data, 2019 EMDHS
 regional estimates, and MoH facility standards.
 
 Output: SQLite database with tables:
-  - facilities          (30 rows)
+  - facilities          (200 rows)
   - vaccines            (7 rows — EPHI infant schedule)
   - hc_hp_clusters      (HC → HP linkages)
   - target_population   (per facility × antigen annual targets)
@@ -86,19 +86,19 @@ VACCINES = [
 # Stratified sample: 20 HPs, 7 HCs, 3 Hospitals across 4 access tiers
 SAMPLING_PLAN = [
     # (type, access_tier, region_pool, count, catchment, lead_time_days_mean, lead_time_sd, sessions_per_week)
-    # URBAN
-    ("Health Post",   "urban",        ["Addis Ababa", "Dire Dawa", "Harari"],                    5, 5000,   2, 0.5, 3),
-    ("Health Center", "urban",        ["Addis Ababa", "Dire Dawa"],                              2, 25000,  2, 0.5, 5),
-    ("Hospital",      "urban",        ["Addis Ababa", "Oromia"],                                 2, 150000, 1, 0.3, 5),
-    # RURAL ROAD
-    ("Health Post",   "rural_road",   ["Amhara", "Oromia", "SNNP", "Sidama"],                   8, 5000,   4, 1.0, 2),
-    ("Health Center", "rural_road",   ["Amhara", "Oromia", "SNNP"],                             3, 25000,  4, 1.0, 3),
-    ("Hospital",      "rural_road",   ["Amhara"],                                                1, 150000, 3, 1.0, 5),
-    # RURAL REMOTE
-    ("Health Post",   "rural_remote", ["Tigray", "Benishangul Gumz", "Gambela", "South West Ethiopia"], 5, 5000, 8, 2.0, 1),
-    ("Health Center", "rural_remote", ["Tigray", "Benishangul Gumz"],                           2, 25000,  8, 2.0, 2),
-    # PASTORAL
-    ("Health Post",   "pastoral",     ["Somali", "Afar"],                                        2, 5000,  14, 4.0, 0.5),  # 0.5 = biweekly
+    # URBAN  (30% of 200 = 60: 33 HP + 13 HC + 14 H)
+    ("Health Post",   "urban",        ["Addis Ababa", "Dire Dawa", "Harari"],                    33, 5000,   2, 0.5, 3),
+    ("Health Center", "urban",        ["Addis Ababa", "Dire Dawa"],                              13, 25000,  2, 0.5, 5),
+    ("Hospital",      "urban",        ["Addis Ababa", "Oromia"],                                 14, 150000, 1, 0.3, 5),
+    # RURAL ROAD  (40% of 200 = 80: 53 HP + 20 HC + 7 H)
+    ("Health Post",   "rural_road",   ["Amhara", "Oromia", "SNNP", "Sidama"],                   53, 5000,   4, 1.0, 2),
+    ("Health Center", "rural_road",   ["Amhara", "Oromia", "SNNP"],                             20, 25000,  4, 1.0, 3),
+    ("Hospital",      "rural_road",   ["Amhara"],                                                7, 150000, 3, 1.0, 5),
+    # RURAL REMOTE  (23.3% of 200 = 47: 34 HP + 13 HC)
+    ("Health Post",   "rural_remote", ["Tigray", "Benishangul Gumz", "Gambela", "South West Ethiopia"], 34, 5000, 8, 2.0, 1),
+    ("Health Center", "rural_remote", ["Tigray", "Benishangul Gumz"],                           13, 25000,  8, 2.0, 2),
+    # PASTORAL  (6.7% of 200 = 13: all HP)
+    ("Health Post",   "pastoral",     ["Somali", "Afar"],                                        13, 5000,  14, 4.0, 0.5),  # 0.5 = biweekly
 ]
 
 
@@ -571,8 +571,14 @@ def simulate_stock_ledger(facilities_df, targets_df, shocks_df, clusters_df, n_w
         else:
             reorder_timer[(fid, ag)] = 4
 
+    # Pre-build targets lookup to avoid repeated DataFrame filtering in the hot loop
+    targets_by_fac = {fid: grp.to_dict("records")
+                      for fid, grp in targets_df.groupby("facility_id")}
+
     # Simulate week by week
     for week in range(n_weeks):
+        if week % 50 == 0:
+            print(f"    week {week}/{n_weeks} ...", flush=True)
         week_date = START_DATE + timedelta(weeks=week)
         birth_mult = birth_seasonality_factor(week_date)
 
@@ -593,7 +599,7 @@ def simulate_stock_ledger(facilities_df, targets_df, shocks_df, clusters_df, n_w
                 supply_mult *= shock["supply_multiplier"]
                 lt_mult *= shock["lead_time_multiplier"]
 
-            for _, tgt in targets_df[targets_df["facility_id"] == fid].iterrows():
+            for tgt in targets_by_fac.get(fid, []):
                 ag = tgt["antigen"]
                 baseline = tgt["weekly_consumption_baseline"]
                 vial_sz = tgt["vial_size"]
@@ -801,53 +807,41 @@ def apply_hc_cascade(stock_ledger_df, facilities_df, clusters_df):
         stock_ledger_df["cascade_source_hc"] = None
         return stock_ledger_df
 
+    stock_ledger_df = stock_ledger_df.copy()
     stock_ledger_df["cascade_affected"] = False
     stock_ledger_df["cascade_source_hc"] = None
 
-    hc_to_hps_map = {}
-    for _, cl in clusters_df.iterrows():
-        hc_id = cl["hc_id"]
-        if hc_id not in hc_to_hps_map:
-            hc_to_hps_map[hc_id] = []
-        hc_to_hps_map[hc_id].append(cl["hp_id"])
+    hc_to_hps_map = clusters_df.groupby("hc_id")["hp_id"].apply(list).to_dict()
 
-    # Find HC stockout weeks
-    hc_ids = facilities_df[facilities_df["type"] == "Health Center"]["facility_id"].values
-    hc_stockouts = stock_ledger_df[
-        (stock_ledger_df["facility_id"].isin(hc_ids)) &
+    # Set MultiIndex for O(log n) row lookups instead of O(n) boolean masks
+    stock_ledger_df = stock_ledger_df.set_index(["facility_id", "week", "antigen"])
+    index_set = set(stock_ledger_df.index)
+
+    hc_ids = set(facilities_df[facilities_df["type"] == "Health Center"]["facility_id"])
+    hc_stockout_idx = stock_ledger_df[
+        stock_ledger_df.index.get_level_values("facility_id").isin(hc_ids) &
         (stock_ledger_df["is_stockout"] == True)
-    ]
+    ].index
 
-    for _, hc_row in hc_stockouts.iterrows():
-        hc_id = hc_row["facility_id"]
-        week = hc_row["week"]
-        ag = hc_row["antigen"]
-
+    for hc_id, week, ag in hc_stockout_idx:
         if hc_id not in hc_to_hps_map:
             continue
-
         for hp_id in hc_to_hps_map[hc_id]:
-            mask = (
-                (stock_ledger_df["facility_id"] == hp_id) &
-                (stock_ledger_df["week"] == week) &
-                (stock_ledger_df["antigen"] == ag)
-            )
-            if mask.any():
-                stock_ledger_df.loc[mask, "cascade_affected"] = True
-                stock_ledger_df.loc[mask, "cascade_source_hc"] = hc_id
-                # Reduce HP resupply to 0 for this week (HC can't provide)
-                stock_ledger_df.loc[mask, "resupply_received"] = 0
-                # Recalculate closing stock
-                idx = stock_ledger_df[mask].index[0]
-                opening = stock_ledger_df.loc[idx, "opening_stock"]
-                consumed = stock_ledger_df.loc[idx, "total_consumed"]
-                new_closing = max(0, opening - consumed)
-                stock_ledger_df.loc[idx, "closing_stock"] = new_closing
-                stock_ledger_df.loc[idx, "is_stockout"] = new_closing <= 0
-                if new_closing <= 0:
-                    stock_ledger_df.loc[idx, "alert_status"] = "critical"
+            key = (hp_id, week, ag)
+            if key not in index_set:
+                continue
+            stock_ledger_df.at[key, "cascade_affected"] = True
+            stock_ledger_df.at[key, "cascade_source_hc"] = hc_id
+            stock_ledger_df.at[key, "resupply_received"] = 0
+            opening = stock_ledger_df.at[key, "opening_stock"]
+            consumed = stock_ledger_df.at[key, "total_consumed"]
+            new_closing = max(0, opening - consumed)
+            stock_ledger_df.at[key, "closing_stock"] = new_closing
+            stock_ledger_df.at[key, "is_stockout"] = new_closing <= 0
+            if new_closing <= 0:
+                stock_ledger_df.at[key, "alert_status"] = "critical"
 
-    return stock_ledger_df
+    return stock_ledger_df.reset_index()
 
 
 # ============================================================
@@ -913,7 +907,7 @@ def main():
     print("=" * 60)
 
     # Step 1: Sample facilities
-    print("\n[1/7] Sampling 30 facilities from CSV...")
+    print("\n[1/7] Sampling 200 facilities from CSV...")
     facilities_df = sample_facilities(FACILITY_CSV)
     print(f"  Sampled: {len(facilities_df)} facilities")
     print(f"  Types: {facilities_df['type'].value_counts().to_dict()}")
@@ -938,9 +932,14 @@ def main():
 
     # Step 5: Simulate stock ledger
     print("\n[5/7] Simulating weekly stock movements (this takes a moment)...")
-    stock_ledger_df, session_log_df, delivery_log_df = simulate_stock_ledger(
-        facilities_df, targets_df, shocks_df, clusters_df, N_WEEKS
-    )
+    import traceback
+    try:
+        stock_ledger_df, session_log_df, delivery_log_df = simulate_stock_ledger(
+            facilities_df, targets_df, shocks_df, clusters_df, N_WEEKS
+        )
+    except Exception as _sim_err:
+        traceback.print_exc()
+        raise
     print(f"  Stock ledger: {len(stock_ledger_df):,} rows")
     print(f"  Session log: {len(session_log_df):,} rows")
     print(f"  Delivery log: {len(delivery_log_df):,} rows")

@@ -98,48 +98,38 @@ def get_session_log(facility_id: str, antigen: str) -> pd.DataFrame:
 
 
 def write_forecasts(forecast_df: pd.DataFrame):
-    with get_connection() as conn:
-        conn.execute("""
-            CREATE TABLE IF NOT EXISTS forecast_output (
-                facility_id TEXT,
-                antigen TEXT,
-                forecast_week INT,
-                forecast_date TEXT,
-                model TEXT,
-                yhat REAL,
-                yhat_lower REAL,
-                yhat_upper REAL,
-                predicted_days_to_stockout INT,
-                alert_threshold_days INT,
-                alert_status TEXT,
-                ensemble_w_sarimax REAL,
-                ensemble_w_prophet REAL,
-                generated_at TEXT,
-                PRIMARY KEY (facility_id, antigen, forecast_week, model)
-            )
-        """)
+    # Deduplicate on PK columns to guard against any duplicate rows
+    forecast_df = forecast_df.drop_duplicates(
+        subset=["facility_id", "antigen", "forecast_week", "model"]
+    )
+    # Use a plain connection (no row_factory) so pandas to_sql works cleanly.
+    # if_exists="replace" drops+recreates the table — main() already dropped it,
+    # so this is safe and avoids the CREATE TABLE + append transaction race.
+    import sqlite3 as _sqlite3
+    path = os.path.join(os.path.dirname(__file__), "..", "data", "vaxalert.db")
+    conn = _sqlite3.connect(path)
+    try:
         forecast_df.to_sql(
-            "forecast_output", conn, if_exists="append", index=False,
-            chunksize=50,
+            "forecast_output", conn, if_exists="replace", index=False,
+            chunksize=500,
         )
+        conn.commit()
+    finally:
+        conn.close()
 
 
 def write_feature_importance(df: pd.DataFrame):
     """Persist top-N feature importances per facility (mean across antigens).
     df columns: facility_id, feature, importance, rank, generated_at."""
-    with get_connection() as conn:
-        conn.execute("""
-            CREATE TABLE IF NOT EXISTS feature_importance (
-                facility_id TEXT,
-                feature TEXT,
-                importance REAL,
-                rank INT,
-                generated_at TEXT,
-                PRIMARY KEY (facility_id, feature)
-            )
-        """)
-        df.to_sql("feature_importance", conn, if_exists="append",
-                  index=False, chunksize=200)
+    import sqlite3 as _sqlite3
+    path = os.path.join(os.path.dirname(__file__), "..", "data", "vaxalert.db")
+    conn = _sqlite3.connect(path)
+    try:
+        df.to_sql("feature_importance", conn, if_exists="replace",
+                  index=False, chunksize=500)
+        conn.commit()
+    finally:
+        conn.close()
 
 
 _MODEL_METRICS_COLS = [

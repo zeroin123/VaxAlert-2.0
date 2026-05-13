@@ -362,6 +362,24 @@ def load_feature_importance():
             return pd.DataFrame()
         return pd.read_sql("SELECT * FROM feature_importance", conn)
 
+@st.cache_data(ttl=300)
+def load_ensemble_weights() -> dict:
+    """Load both weight sets from the JSON sidecar written by StackingEnsemble.save()."""
+    import json as _json
+    path = os.path.join(
+        os.path.dirname(os.path.dirname(os.path.abspath(__file__))),
+        ".cache", "meta_model_weights.json",
+    )
+    default = {m: 0.2 for m in ["naive_last_value", "naive_seasonal",
+                                  "holt_winters", "xgboost", "prophet"]}
+    if not os.path.exists(path):
+        return {"normal": default, "zero_inflated": default}
+    try:
+        with open(path) as f:
+            return _json.load(f)
+    except Exception:
+        return {"normal": default, "zero_inflated": default}
+
 
 @st.cache_data(ttl=300)
 def load_shocks(facility_id):
@@ -385,6 +403,7 @@ target_population = load_target_population()
 forecast_output = load_forecast_output()
 model_metrics = load_model_metrics()
 feature_importance = load_feature_importance()
+global_ensemble_weights = load_ensemble_weights()
 
 # ── Sidebar ──────────────────────────────────────────────────────────────────
 
@@ -407,7 +426,7 @@ with st.sidebar:
     # ── Navigation ───────────────────────────────────────────
     view = st.radio(
         "Navigation",
-        ["National Overview", "Facility Drill-Down", "Cascade View", "Model Performance"],
+        ["National Overview", "Facility Drill-Down", "Cascade View", "Impact", "Model Performance"],
         label_visibility="collapsed",
     )
 
@@ -560,9 +579,9 @@ elif view == "Facility Drill-Down":
     lead_time = float(sel_fac["lead_time_days_mean"])
     reorder_point = lead_time * weekly_consumption / 7.0
 
-    # Ensemble weights for this series
-    ens_weights = {"w_sarimax": 0.5, "w_prophet": 0.5}
+    # Detect zero-inflated from model_metrics; pick matching weight set
     val_mae = 0.0
+    is_zero_inflated_series = False
     if not model_metrics.empty:
         ens_row = model_metrics[
             (model_metrics["facility_id"] == sel_fid) &
@@ -571,9 +590,15 @@ elif view == "Facility Drill-Down":
             (model_metrics["fold"] == "final")
         ]
         if not ens_row.empty:
-            ens_weights["w_sarimax"] = float(ens_row.iloc[0]["w_sarimax"] or 0.5)
-            ens_weights["w_prophet"] = float(ens_row.iloc[0]["w_prophet"] or 0.5)
             val_mae = float(ens_row.iloc[0]["mae"] or 0.0)
+            is_zero_inflated_series = bool(ens_row.iloc[0]["zero_inflated"])
+
+    # Global constrained weights — ZI series use the 3-model blend, normal use all 5
+    ens_weights = global_ensemble_weights.get(
+        "zero_inflated" if is_zero_inflated_series else "normal",
+        {m: 0.2 for m in ["naive_last_value", "naive_seasonal",
+                            "holt_winters", "xgboost", "prophet"]},
+    )
 
     st.markdown('<div class="section-card">', unsafe_allow_html=True)
     if not series.empty:
@@ -587,10 +612,42 @@ elif view == "Facility Drill-Down":
             val_mae=val_mae,
             shocks=shocks,
             reorder_point=reorder_point,
+            is_zero_inflated=is_zero_inflated_series,
         )
     else:
         st.warning("No stock data for this facility/antigen combination.")
     st.markdown('</div>', unsafe_allow_html=True)
+
+    # ── Restock suggestion callout ───────────────────────────────────────────
+    if tp and not fcast.empty:
+        import math as _math
+        _lt_weeks = lead_time / 7
+        _buf_weeks = 2 if sel_fac["type"] == "Health Post" else 7
+        _target_stock = weekly_consumption * (_lt_weeks + _buf_weeks)
+        _ens_fcast = fcast[fcast["model"] == "ensemble"].copy()
+        if not _ens_fcast.empty:
+            _first_fw = int(_ens_fcast["forecast_week"].min())
+            _horizon_week = _first_fw + max(0, round(_lt_weeks) - 1)
+            _avail = _ens_fcast["forecast_week"].values
+            _closest_fw = _avail[abs(_avail - _horizon_week).argmin()]
+            _yhat_row = _ens_fcast[_ens_fcast["forecast_week"] == _closest_fw]
+            _yhat_at_delivery = float(_yhat_row["yhat"].iloc[0]) if not _yhat_row.empty else 0.0
+            _vial_size = max(1, int(tp.get("vial_size", 1) or 1))
+            _raw_order = max(0.0, _target_stock - _yhat_at_delivery)
+            _order_qty = int(_math.ceil(_raw_order / _vial_size) * _vial_size)
+            if _order_qty > 0:
+                st.info(
+                    f"📦 **Restock suggestion:** Order **{_order_qty:,} doses** of {sel_ant} now "
+                    f"to cover the {lead_time:.0f}-day lead time + {_buf_weeks}-week safety buffer. "
+                    f"*(Projected stock at delivery: {_yhat_at_delivery:.0f} doses · "
+                    f"Target: {_target_stock:.0f} doses)*"
+                )
+            else:
+                st.success(
+                    f"✅ **Stock sufficient:** Projected stock at delivery "
+                    f"({_yhat_at_delivery:.0f} doses) already meets the {sel_ant} target "
+                    f"({_target_stock:.0f} doses). No emergency order needed."
+                )
 
     # ── Per-facility feature importance ──────────────────────────────────────
     if not feature_importance.empty:
@@ -719,7 +776,7 @@ elif view == "Model Performance":
             "holt_winters": "Holt-Winters",
             "xgboost": "XGBoost",
             "prophet": "Prophet",
-            "ensemble": "Ensemble",
+            "ensemble": "Constrained Blend (all 210 series)",
         }
 
         # ── Per-model summary table ──────────────────────────────────────────
@@ -737,7 +794,33 @@ elif view == "Model Performance":
             summary["SDR (%)"] = (summary["SDR (%)"] * 100).round(1)
             summary["False Alert (%)"] = (summary["False Alert (%)"] * 100).round(1)
             st.dataframe(summary, use_container_width=True)
-            
+            st.caption(
+                "🔵 **Constrained Blend** covers **all 210 series** (including zero-inflated). "
+                "For non-ZI series it optimises weights across all 5 models (Naive ≥ 20%, HW ≥ 20%). "
+                "For zero-inflated series it restricts to a 3-model blend (Naive Last Value + Seasonal + Holt-Winters only; "
+                "XGBoost & Prophet are hard-zeroed). "
+                "Zero-inflated series use a 3-model blend (Naive Last Value + Seasonal Naive + Holt-Winters); XGBoost and Prophet are excluded from those series."
+            )
+
+            # Show learned ensemble weights if available
+            try:
+                w_norm = global_ensemble_weights.get("normal", {})
+                w_zi   = global_ensemble_weights.get("zero_inflated", {})
+                if w_norm:
+                    with st.expander("⚖️ Learned Ensemble Weights (click to expand)"):
+                        wc1, wc2 = st.columns(2)
+                        with wc1:
+                            st.markdown("**Non-ZI series (all 5 models)**")
+                            for m, v in w_norm.items():
+                                st.markdown(f"- {MODEL_DISPLAY.get(m, m).split('(')[0].strip()}: **{v*100:.1f}%**")
+                        with wc2:
+                            st.markdown("**Zero-inflated series (3-model blend)**")
+                            for m, v in w_zi.items():
+                                if v > 0.001:
+                                    st.markdown(f"- {MODEL_DISPLAY.get(m, m).split('(')[0].strip()}: **{v*100:.1f}%**")
+            except Exception:
+                pass
+
             with st.expander("📖 Metric Definitions & How to Interpret This Table"):
                 st.markdown("""
                 - **MAE (Mean Absolute Error)**: The average 'miss' in doses. For example, an MAE of 10.5 means the AI's prediction is typically off by ~10 doses. **Lower is better.**
@@ -755,38 +838,47 @@ elif view == "Model Performance":
             cv_summary.columns = ["Mean MAE", "Std MAE"]
             st.dataframe(cv_summary, use_container_width=True)
 
-        # ── MAE by access tier ───────────────────────────────────────────────
-        st.subheader("MAE by Model × Access Tier (Final Test)")
+        # ── MAPE by access tier ──────────────────────────────────────────────
+        st.subheader("Forecast Error by Model x Access Tier (Final Test)")
+        st.caption(
+            "MAPE (Mean Absolute Percentage Error) normalises each model's error by the "
+            "facility's actual consumption, making it a fair apples-to-apples comparison "
+            "across tiers with very different volumes (pastoral HPs: ~5 doses/week; "
+            "urban hospitals: 100+ doses/week). Lower is better."
+        )
         if not final_df.empty:
             tier_merged = final_df.merge(
                 facilities[["facility_id", "access_tier"]], on="facility_id", how="left"
             )
-            tier_mae = (
-                tier_merged.groupby(["model", "access_tier"])["mae"]
+            tier_mape = (
+                tier_merged.groupby(["model", "access_tier"])["mape"]
                 .mean().reset_index()
             )
-            tier_mae["model_label"] = tier_mae["model"].map(lambda x: MODEL_DISPLAY.get(x, x))
+            tier_mape["model_label"] = tier_mape["model"].map(lambda x: MODEL_DISPLAY.get(x, x))
 
-            tiers = sorted(tier_mae["access_tier"].unique())
-            models_in_data = tier_mae["model_label"].unique()
+            models_in_data = tier_mape["model_label"].unique()
             colors = ["#3498db", "#e74c3c", "#27ae60", "#f39c12", "#9b59b6", "#1abc9c"]
 
             fig_tier = go.Figure()
             for i, m in enumerate(models_in_data):
-                sub = tier_mae[tier_mae["model_label"] == m]
+                sub = tier_mape[tier_mape["model_label"] == m]
                 fig_tier.add_trace(go.Bar(
                     name=m,
                     x=sub["access_tier"],
-                    y=sub["mae"].round(2),
+                    y=(sub["mape"] * 100).round(1),
                     marker_color=colors[i % len(colors)],
+                    text=(sub["mape"] * 100).round(1).astype(str) + "%",
+                    textposition="outside",
                 ))
             fig_tier.update_layout(
                 barmode="group",
-                height=360,
+                height=380,
                 xaxis_title="Access Tier",
-                yaxis_title="Mean MAE (doses/week)",
+                yaxis_title="Mean MAPE (%)",
                 legend=dict(orientation="h", y=1.05),
                 margin=dict(l=50, r=20, t=60, b=50),
+                plot_bgcolor="white",
+                yaxis=dict(showgrid=True, gridcolor="#f0f0f0"),
             )
             st.plotly_chart(fig_tier, use_container_width=True)
 
@@ -980,3 +1072,11 @@ elif view == "Model Performance":
             yaxis=dict(showgrid=True, gridcolor="#f0f0f0", rangemode="tozero"),
         )
         st.plotly_chart(fig_exp, use_container_width=True)
+
+# ════════════════════════════════════════════════════════════════════════════
+# VIEW 5: Impact
+# ════════════════════════════════════════════════════════════════════════════
+
+elif view == "Impact":
+    from dashboard.components.impact_simulator import render_impact_tab
+    render_impact_tab()

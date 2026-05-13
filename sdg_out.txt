@@ -1,0 +1,59 @@
+============================================================
+VaxAlert Synthetic Data Generator
+============================================================
+
+[1/7] Sampling 200 facilities from CSV...
+  Sampled: 200 facilities
+  Types: {'Health Post': 133, 'Health Center': 46, 'Hospital': 21}
+  Regions: 10 unique
+
+[2/7] Assigning HC-HP clusters...
+  Created 328 HC-HP linkages
+
+[3/7] Calculating target populations...
+  Generated 1400 facility × antigen targets
+  Total target infants (HP primary): 141,204
+
+[4/7] Generating shock events...
+  Generated 9497 shock events
+  Types: {'pandemic_disruption': 4400, 'measles_sia_campaign': 3222, 'rainy_season_road_closure': 1092, 'rainy_season_delay': 489, 'epss_hub_stockout': 123, 'conflict_disruption': 120, 'cold_chain_failure': 51}
+
+[5/7] Simulating weekly stock movements (this takes a moment)...
+    week 0/364 ...
+    week 50/364 ...
+    week 100/364 ...
+    week 150/364 ...
+    week 200/364 ...
+    week 250/364 ...
+    week 300/364 ...
+    week 350/364 ...
+  Stock ledger: 509,600 rows
+  Session log: 464,368 rows
+  Delivery log: 167,197 rows
+
+[6/7] Applying HC→HP cascade effects...
+  Cascade-affected records: 41790
+
+[7/7] Writing to SQLite: data/vaxalert.db
+
+============================================================
+DATABASE SUMMARY
+============================================================
+  facilities                       200 rows
+  vaccines                           7 rows
+  hc_hp_clusters                   328 rows
+  target_population              1,400 rows
+  shock_events                   9,497 rows
+  stock_ledger                 509,600 rows
+  session_log                  464,368 rows
+  delivery_log                 167,197 rows
+
+--- Key Metrics ---
+  Stockout rate: 70346/509600 (13.8%)
+  Critical alerts: 81,995
+  Total children missed: 243,802
+  Cascade-affected records: 41,790
+
+Database saved to: data/vaxalert.db
+File size: 98.6 MB
+Done.

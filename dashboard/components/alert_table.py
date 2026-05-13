@@ -1,20 +1,45 @@
+import math
 import pandas as pd
 import streamlit as st
+
+from utils.db import get_connection
+
+# Weeks of safety buffer by facility type
+_BUFFER_WEEKS = {"Health Post": 2}
+_BUFFER_DEFAULT = 7  # Health Centre, Hospital
+
+
+def _load_target_population() -> pd.DataFrame:
+    """Returns facility_id, antigen, weekly_consumption_baseline, vial_size."""
+    with get_connection() as conn:
+        return pd.read_sql_query(
+            "SELECT facility_id, antigen, weekly_consumption_baseline, vial_size "
+            "FROM target_population",
+            conn,
+        )
 
 
 def _build_display(merged: pd.DataFrame) -> pd.DataFrame:
     merged = merged.copy()
     merged["Margin (days)"] = merged["predicted_days_to_stockout"] - merged["alert_threshold_days"]
-    display = merged[[
+
+    cols_src = [
         "name", "type", "region", "antigen",
         "predicted_days_to_stockout", "lead_time_days_mean",
         "alert_threshold_days", "Margin (days)",
-    ]].copy()
-    display.columns = [
+    ]
+    cols_dst = [
         "Facility", "Type", "Region", "Antigen",
         "Days to Stockout", "Lead Time (days)",
         "Threshold (days)", "Margin (days)",
     ]
+
+    if "restock_qty" in merged.columns:
+        cols_src.append("restock_qty")
+        cols_dst.append("Suggested Order (doses)")
+
+    display = merged[cols_src].copy()
+    display.columns = cols_dst
     return display.sort_values("Days to Stockout", ascending=True).reset_index(drop=True)
 
 
@@ -23,7 +48,7 @@ def render_alert_table(
     facilities: pd.DataFrame,
     forecast_horizon: int = 1,
 ):
-    """Two stacked tables - Critical first (most urgent), then Warning.
+    """Two stacked tables — Critical first (most urgent), then Warning.
     forecast_horizon (1..8) selects which forecast week to display."""
 
     if forecast_output.empty:
@@ -31,6 +56,7 @@ def render_alert_table(
     else:
         first_week = int(forecast_output["forecast_week"].min())
         target_week = first_week + (forecast_horizon - 1)
+
     ens_latest = forecast_output[
         (forecast_output["model"] == "ensemble") &
         (forecast_output["forecast_week"] == target_week)
@@ -46,10 +72,45 @@ def render_alert_table(
         on="facility_id", how="left",
     )
 
+    # ── Restock quantity calculation ─────────────────────────────────────────
+    try:
+        tp = _load_target_population()
+        merged = merged.merge(tp, on=["facility_id", "antigen"], how="left")
+
+        def _yhat_at_lead_time(row):
+            lt_weeks = max(1, round(row["lead_time_days_mean"] / 7))
+            horizon_week = target_week + lt_weeks - 1
+            candidate = forecast_output[
+                (forecast_output["model"] == "ensemble") &
+                (forecast_output["facility_id"] == row["facility_id"]) &
+                (forecast_output["antigen"] == row["antigen"])
+            ]
+            if candidate.empty:
+                return 0.0
+            avail = candidate["forecast_week"].values
+            closest = avail[abs(avail - horizon_week).argmin()]
+            yhat_row = candidate[candidate["forecast_week"] == closest]
+            return float(yhat_row["yhat"].iloc[0]) if not yhat_row.empty else 0.0
+
+        def _restock_qty(row):
+            lt_weeks = row["lead_time_days_mean"] / 7
+            buf = _BUFFER_WEEKS.get(row["type"], _BUFFER_DEFAULT)
+            wc = float(row.get("weekly_consumption_baseline") or 0)
+            vs = max(1, int(row.get("vial_size") or 1))
+            target = wc * (lt_weeks + buf)
+            raw = max(0.0, target - row["yhat_at_delivery"])
+            return int(math.ceil(raw / vs) * vs)
+
+        merged["yhat_at_delivery"] = merged.apply(_yhat_at_lead_time, axis=1)
+        merged["restock_qty"] = merged.apply(_restock_qty, axis=1)
+
+    except Exception:
+        pass  # Graceful fallback: table still renders without the restock column
+
     critical = merged[merged["alert_status"] == "critical"]
     warning = merged[merged["alert_status"] == "warning"]
 
-    # ── Critical ────────────────────────────────────────────────────────────
+    # ── Critical ─────────────────────────────────────────────────────────────
     st.markdown(
         f"#### 🚨 Critical Alerts <span style='color:#c0392b; font-weight:600'>"
         f"({len(critical)})</span>",
@@ -71,7 +132,7 @@ def render_alert_table(
 
     st.markdown(" ")
 
-    # ── Warning ─────────────────────────────────────────────────────────────
+    # ── Warning ──────────────────────────────────────────────────────────────
     st.markdown(
         f"#### ⚠️ Warning Alerts <span style='color:#e67e22; font-weight:600'>"
         f"({len(warning)})</span>",

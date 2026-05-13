@@ -183,6 +183,14 @@ def forecast_series(facility_id, antigen):
     lead_time = float(row[0]) if row else 14.0
 
     zero_inf = _is_zero_inflated(facility_id, antigen)
+
+    # access_tier needed for both ZI and non-ZI paths
+    with get_connection() as conn:
+        _tier_row = conn.execute(
+            "SELECT access_tier FROM facilities WHERE facility_id=?", (facility_id,)
+        ).fetchone()
+    access_tier = _tier_row[0] if _tier_row else "rural_road"
+
     cv_mae_naive = _get_cv_mae(facility_id, antigen, "naive_last_value")
     cv_mae_hw = _get_cv_mae(facility_id, antigen, "holt_winters")
     cv_mae_xgb = _get_cv_mae(facility_id, antigen, "xgboost")
@@ -281,17 +289,12 @@ def forecast_series(facility_id, antigen):
                 "prophet":          p_yhat,
             }
 
-            # Look up access_tier
-            with get_connection() as conn:
-                row = conn.execute(
-                    "SELECT access_tier FROM facilities WHERE facility_id=?", (facility_id,)
-                ).fetchone()
-            access_tier = row[0] if row else "rural_road"
             weekly_consumption = float(tp.get("weekly_consumption_baseline", 1.0)) if tp else 1.0
 
             meta_X = build_meta_features(
                 base_preds_dict, current_stock, weekly_consumption,
                 access_tier, list(range(1, FORECAST_HORIZON + 1)),
+                zero_inf=False,
             )
             ens_int = meta.predict_interval(meta_X)
             e_yhat = ens_int["yhat"].values
@@ -306,6 +309,43 @@ def forecast_series(facility_id, antigen):
                 cv_mae_ensemble if not np.isnan(cv_mae_ensemble) else 7.0,
                 weekly_consumption,
                 w_sarimax=None, w_prophet=None,
+                generated_at=generated_at,
+            ))
+
+    else:
+        # Zero-inflated series: constrained Naive+HW blend via the global meta-model ZI path
+        nv_sn_zi = NaiveModel("seasonal_naive").fit(y_train)
+        nv_sn_zi_yhat = nv_sn_zi.predict(FORECAST_HORIZON).values
+
+        base_preds_zi = {
+            "naive_last_value": nv_int["yhat"].values,        # already computed above
+            "naive_seasonal":   nv_sn_zi_yhat,
+            "holt_winters":     hw_int["yhat"].values,         # already computed above
+            # XGBoost and Prophet get hard-zero weight for ZI series;
+            # fill with last-value fallback so meta_X shape is consistent
+            "xgboost":  np.full(FORECAST_HORIZON, float(y_train.iloc[-1])),
+            "prophet":  np.full(FORECAST_HORIZON, float(y_train.iloc[-1])),
+        }
+
+        meta = _META_MODEL
+        if meta is not None:
+            weekly_consumption_zi = float(tp.get("weekly_consumption_baseline", 1.0)) if tp else 1.0
+            meta_X_zi = build_meta_features(
+                base_preds_zi, current_stock, weekly_consumption_zi,
+                access_tier, list(range(1, FORECAST_HORIZON + 1)),
+                zero_inf=True,
+            )
+            ens_int_zi = meta.predict_interval(meta_X_zi)
+            e_yhat  = np.maximum(0, ens_int_zi["yhat"].values)
+            e_lower = np.maximum(0, ens_int_zi["yhat_lower"].values)
+            e_upper = ens_int_zi["yhat_upper"].values
+            weekly_burn = max(float(e_yhat.mean()), 0.1)
+            all_rows.extend(_make_forecast_rows(
+                facility_id, antigen, "ensemble",
+                e_yhat, e_lower, e_upper,
+                current_stock, weekly_burn, forecast_dates, lead_time,
+                cv_mae_ensemble if not np.isnan(cv_mae_ensemble) else cv_mae_naive,
+                weekly_consumption_zi,
                 generated_at=generated_at,
             ))
 

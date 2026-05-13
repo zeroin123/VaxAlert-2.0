@@ -29,6 +29,7 @@ import logging
 import os
 import sys
 import warnings
+from multiprocessing import Pool, cpu_count
 import numpy as np
 import pandas as pd
 
@@ -219,7 +220,7 @@ def run_series_pass1(facility_id, antigen, series_full, exog_full,
     horizon_steps = list(range(1, h_w + 1))
     meta_X = build_meta_features(
         base_w_preds, current_stock_at_w, weekly_consumption,
-        access_tier, horizon_steps,
+        access_tier, horizon_steps, zero_inf=zero_inf,
     )
     stacking_X_rows.append(meta_X)
     stacking_y.extend(y_w_test.values.tolist())
@@ -268,6 +269,36 @@ def run_series_pass1(facility_id, antigen, series_full, exog_full,
     }
 
 
+# ── Parallel worker helpers ──────────────────────────────────────────────────
+
+_WORKER_FACILITIES = None  # set per-process by Pool initializer
+
+
+def _init_worker(facilities_df):
+    global _WORKER_FACILITIES
+    _WORKER_FACILITIES = facilities_df
+
+
+def _process_series(pair):
+    """Worker: load data for one (facility, antigen) pair and run pass 1."""
+    fid, ant = pair
+    try:
+        series_full = get_stock_series(fid, ant)
+        exog_full = build_exog_features(fid, n_weeks=FINAL_TEST_END, antigen=ant)
+        if len(series_full) < FINAL_TEST_END:
+            return None
+        local_metrics, local_X_rows, local_y, local_cache = [], [], [], {}
+        run_series_pass1(
+            fid, ant, series_full, exog_full,
+            local_metrics, local_X_rows, local_y, local_cache,
+            _WORKER_FACILITIES,
+        )
+        return local_metrics, local_X_rows, local_y, local_cache
+    except Exception as e:
+        logger.error("Failed %s/%s: %s", fid, ant, e)
+        return None
+
+
 def main():
     parser = argparse.ArgumentParser()
     parser.add_argument("--sample", type=int, default=None)
@@ -280,29 +311,30 @@ def main():
     if args.sample:
         pairs = pairs[:args.sample]
 
-    print(f"=== Pass 1: base CV + collect stacking dataset ({len(pairs)} series) ===")
+    n_workers = min(max(1, cpu_count() - 1), 4)  # cap at 4 to limit memory pressure
+    print(f"=== Pass 1: base CV + collect stacking dataset ({len(pairs)} series, {n_workers} workers) ===")
     all_metrics = []
     stacking_X_rows = []
     stacking_y = []
     final_test_cache = {}
 
-    for idx, (fid, ant) in enumerate(pairs):
+    with Pool(n_workers, initializer=_init_worker, initargs=(facilities,),
+              maxtasksperchild=10) as pool:
         try:
-            series_full = get_stock_series(fid, ant)
-            exog_full = build_exog_features(fid, n_weeks=FINAL_TEST_END, antigen=ant)
-            if len(series_full) < FINAL_TEST_END:
-                continue
-            run_series_pass1(
-                fid, ant, series_full, exog_full,
-                all_metrics, stacking_X_rows, stacking_y, final_test_cache,
-                facilities,
-            )
-        except Exception as e:
-            logger.error("Failed %s/%s: %s", fid, ant, e)
-            continue
-
-        if (idx + 1) % 10 == 0 or idx == len(pairs) - 1:
-            print(f"  {idx + 1}/{len(pairs)} | {fid} {ant}")
+            for idx, result in enumerate(pool.imap_unordered(_process_series, pairs, chunksize=1)):
+                if result is not None:
+                    m, x, y, c = result
+                    all_metrics.extend(m)
+                    stacking_X_rows.extend(x)
+                    stacking_y.extend(y)
+                    final_test_cache.update(c)
+                if (idx + 1) % 100 == 0 or idx == len(pairs) - 1:
+                    print(f"  {idx + 1}/{len(pairs)}", flush=True)
+        except Exception as _pool_err:
+            import traceback
+            print(f"\nPool error after {idx+1} series: {_pool_err}", flush=True)
+            traceback.print_exc()
+            pool.terminate()
 
     print(f"\n=== Pass 2: train global stacking meta-learner ===")
     if not stacking_X_rows:
@@ -315,7 +347,8 @@ def main():
 
     meta = StackingEnsemble().fit(stacking_X, stacking_y_arr)
     meta.save()
-    print(f"  Meta-model trained. Conformal half-width = {meta._conformal_width:.2f} doses")
+    widths = meta._conformal_widths or {}
+    print(f"  Meta-model trained. Conformal widths by tier = { {k: round(v,2) for k,v in widths.items()} }")
     fi = meta.feature_importance().head(8)
     print(f"  Top meta-features:\n{fi.to_string()}")
 
@@ -324,23 +357,41 @@ def main():
     horizon_steps = list(range(1, h_f + 1))
 
     for (fid, ant), cache in final_test_cache.items():
-        meta_X = build_meta_features(
-            cache["base_preds"], cache["current_stock"],
-            cache["weekly_consumption"], cache["access_tier"], horizon_steps,
-        )
-        ens_int = meta.predict_interval(meta_X)
-        yhat = ens_int["yhat"].values
-        lower = ens_int["yhat_lower"].values
-        upper = ens_int["yhat_upper"].values
-
-        predicted_dts = pd.Series(
-            [float(cache["y_true"][0]) / max(yhat.mean(), 0.1) * 7] * h_f
-        )
-        all_metrics.append(_metric_row(
-            fid, ant, "ensemble", "final",
-            cache["y_true"], yhat, lower, upper, cache["actual_so"],
-            predicted_dts, cache["lead_time"], cache["zero_inf"],
-        ))
+        if not cache["zero_inf"]:
+            meta_X = build_meta_features(
+                cache["base_preds"], cache["current_stock"],
+                cache["weekly_consumption"], cache["access_tier"], horizon_steps,
+            )
+            ens_int = meta.predict_interval(meta_X)
+            yhat = ens_int["yhat"].values
+            lower = ens_int["yhat_lower"].values
+            upper = ens_int["yhat_upper"].values
+            predicted_dts = pd.Series(
+                [float(cache["y_true"][0]) / max(yhat.mean(), 0.1) * 7] * h_f
+            )
+            all_metrics.append(_metric_row(
+                fid, ant, "ensemble", "final",
+                cache["y_true"], yhat, lower, upper, cache["actual_so"],
+                predicted_dts, cache["lead_time"], cache["zero_inf"],
+            ))
+        else:
+            # Zero-inflated final test: constrained Naive+HW blend (same meta model, ZI path)
+            meta_X_zi = build_meta_features(
+                cache["base_preds"], cache["current_stock"],
+                cache["weekly_consumption"], cache["access_tier"], horizon_steps,
+                zero_inf=True,
+            )
+            ens_int_zi = meta.predict_interval(meta_X_zi)
+            yhat_zi = ens_int_zi["yhat"].values
+            predicted_dts = pd.Series(
+                [float(cache["y_true"][0]) / max(yhat_zi.mean(), 0.1) * 7] * h_f
+            )
+            all_metrics.append(_metric_row(
+                fid, ant, "ensemble", "final",
+                cache["y_true"], yhat_zi,
+                ens_int_zi["yhat_lower"].values, ens_int_zi["yhat_upper"].values,
+                cache["actual_so"], predicted_dts, cache["lead_time"], cache["zero_inf"],
+            ))
 
     print(f"\n=== Writing metrics ===")
     metrics_df = pd.DataFrame(all_metrics)

@@ -13,6 +13,7 @@ def render_stock_chart(
     val_mae: float,
     shocks: pd.DataFrame,
     reorder_point: float,
+    is_zero_inflated: bool = False,
 ):
     """
     Combined actual stock history + 8-week ensemble forecast chart.
@@ -136,12 +137,25 @@ def render_stock_chart(
                 xanchor="center", yanchor="top",
             )
 
-    w_x = ensemble_weights.get("w_xgb", ensemble_weights.get("w_sarimax", 0.5))
-    w_p = ensemble_weights.get("w_prophet", 0.5)
-    subtitle = (
-        f"XGBoost {w_x*100:.0f}% / Prophet {w_p*100:.0f}%  |  "
-        f"Typical error: ±{val_mae:.1f} doses/week"
-    )
+    if is_zero_inflated:
+        # Zero-inflated series: constrained Naive + Holt-Winters blend
+        w_nv = ensemble_weights.get("naive_last_value", 0.4)
+        w_sn = ensemble_weights.get("naive_seasonal", 0.1)
+        w_hw = ensemble_weights.get("holt_winters", 0.5)
+        subtitle = (
+            f"Zero-inflated blend — Naive {w_nv*100:.0f}% · Seasonal {w_sn*100:.0f}% · "
+            f"HW {w_hw*100:.0f}%  |  Typical error: ±{val_mae:.1f} doses/week"
+        )
+    else:
+        w_nv  = ensemble_weights.get("naive_last_value", 0.2)
+        w_hw  = ensemble_weights.get("holt_winters", 0.2)
+        w_xgb = ensemble_weights.get("xgboost", 0.2)
+        w_p   = ensemble_weights.get("prophet", 0.2)
+        subtitle = (
+            f"Naive {w_nv*100:.0f}% · HW {w_hw*100:.0f}% · "
+            f"XGBoost {w_xgb*100:.0f}% · Prophet {w_p*100:.0f}%  |  "
+            f"Typical error: ±{val_mae:.1f} doses/week"
+        )
 
     fig.update_layout(
         title=dict(
