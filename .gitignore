@@ -27,9 +27,6 @@ Thumbs.db
 # Streamlit local secrets
 .streamlit/secrets.toml
 
-# Databases (generated — run vaxalert_sdg.py to recreate)
-*.db
-data/sdg_input/
 
 # Reference materials (large copyrighted textbook downloads)
 Time_Series_Forecasting_in_Python_Fi_z_library_sk,_1lib_sk,.md
