@@ -31,4 +31,19 @@ Thumbs.db
 # Reference materials (large copyrighted textbook downloads)
 Time_Series_Forecasting_in_Python_Fi_z_library_sk,_1lib_sk,.md
 
+# Databases (generated locally, not stored in repo)
+*.db
+*.db-shm
+*.db-wal
+
+# Claude AI assistant config
+.claude/
+
+# Microsoft Office temp/lock files
+~$*
+
+# Model cache files
+*.pkl
+*.joblib
+
 
