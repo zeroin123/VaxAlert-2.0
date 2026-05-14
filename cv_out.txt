@@ -1,53 +1,43 @@
-=== Pass 1: base CV + collect stacking dataset (1400 series, 4 workers) ===
-  100/1400
-  200/1400
-  300/1400
-  400/1400
-  500/1400
-  600/1400
-  700/1400
-  800/1400
-  900/1400
-  1000/1400
-  1100/1400
-  1200/1400
-  1300/1400
-  1400/1400
+=== Pass 1: base CV + collect stacking dataset (350 series, 4 workers) ===
+  100/350
+  200/350
+  300/350
+  350/350
 
 === Pass 2: train global stacking meta-learner ===
-  Stacking dataset: 30800 rows × 14 features
-  Meta-model trained. Conformal widths by tier = {0: 8.85, 1: 9.76, 2: 12.24, 3: 12.37}
+  Stacking dataset: 7700 rows × 14 features
+  Meta-model trained. Conformal widths by tier = {0: 8.59, 1: 9.34, 2: 11.91, 3: 11.36}
   Top meta-features:
-prophet             5.600292e-01
+prophet             6.000000e-01
 naive_last_value    2.000000e-01
 holt_winters        2.000000e-01
-naive_seasonal      3.997084e-02
-xgboost             1.754801e-15
+naive_seasonal      1.025093e-09
+xgboost             1.359353e-16
 
 === Pass 3: apply stacked ensemble to final test ===
 
 === Writing metrics ===
-Wrote 29400 metric rows.
+Wrote 7350 metric rows.
 
 ======================================================================
 CV SUMMARY — Mean MAE (folds 1-3)
 ======================================================================
                    mean    std
 model                         
-holt_winters      11.91  31.45
-naive_last_value  13.71  37.15
-naive_seasonal    13.79  35.21
-prophet           10.44  25.00
-xgboost           18.17  55.50
+holt_winters      13.01  34.49
+naive_last_value  14.91  40.59
+naive_seasonal    14.34  35.09
+prophet           11.03  26.85
+xgboost           19.82  61.36
 
 ======================================================================
 FINAL TEST (weeks 140-155)
 ======================================================================
                          mae  interval_coverage  stockout_detection_rate
 model                                                                   
-ensemble              10.768              0.744                    0.464
-holt_winters          11.467              0.706                    0.423
-naive_last_value      13.021              0.629                    0.467
-naive_seasonal_naive  14.026              0.612                    0.452
-prophet               10.836              0.740                    0.460
-xgboost               17.457              0.550                    0.277
+ensemble              11.652              0.713                    0.510
+holt_winters          12.733              0.712                    0.482
+naive_last_value      15.382              0.631                    0.501
+naive_seasonal_naive  14.791              0.621                    0.496
+prophet               11.349              0.745                    0.491
+xgboost               19.810              0.557                    0.352

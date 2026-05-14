@@ -4,9 +4,20 @@ import streamlit as st
 
 from utils.db import get_connection
 
-# Weeks of safety buffer by facility type
-_BUFFER_WEEKS = {"Health Post": 2}
-_BUFFER_DEFAULT = 7  # Health Centre, Hospital
+# Tier-aware safety buffer (weeks) — pastoral HPs need 3× the buffer of urban HPs
+# "rural" covers both rural_road and rural_remote
+_BUFFER_BY_TIER = {
+    "Health Post":   {"urban": 2, "rural": 3, "pastoral": 6},
+    "Health Center": {"urban": 4, "rural": 5, "pastoral": 7},
+    "Hospital":      {"urban": 4, "rural": 5, "pastoral": 7},
+}
+_TIER_KEY = {  # map DB access_tier → buffer dict key
+    "urban":        "urban",
+    "rural_road":   "rural",
+    "rural_remote": "rural",
+    "pastoral":     "pastoral",
+}
+_BUFFER_DEFAULT = 4  # fallback if type/tier not found
 
 
 def _load_target_population() -> pd.DataFrame:
@@ -94,7 +105,8 @@ def render_alert_table(
 
         def _restock_qty(row):
             lt_weeks = row["lead_time_days_mean"] / 7
-            buf = _BUFFER_WEEKS.get(row["type"], _BUFFER_DEFAULT)
+            tier_key = _TIER_KEY.get(row.get("access_tier", ""), "rural")
+            buf = _BUFFER_BY_TIER.get(row["type"], {}).get(tier_key, _BUFFER_DEFAULT)
             wc = float(row.get("weekly_consumption_baseline") or 0)
             vs = max(1, int(row.get("vial_size") or 1))
             target = wc * (lt_weeks + buf)

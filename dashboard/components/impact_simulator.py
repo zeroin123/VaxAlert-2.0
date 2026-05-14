@@ -20,9 +20,9 @@ from utils.db import get_connection
 
 # ── Constants ────────────────────────────────────────────────────────────────
 SIMULATION_YEARS      = 7
-SIMULATION_FACILITIES = 200
+SIMULATION_FACILITIES = 50
 ETHIOPIA_FACILITIES   = 17_500   # FMOH 2023 (HCs + HPs)
-SCALE_FACTOR          = ETHIOPIA_FACILITIES / SIMULATION_FACILITIES  # 583x
+SCALE_FACTOR          = ETHIOPIA_FACILITIES / SIMULATION_FACILITIES  # 350x
 
 TIER_ORDER  = ["pastoral", "rural_remote", "rural_road", "urban"]
 TIER_LABELS = {

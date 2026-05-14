@@ -83,22 +83,22 @@ VACCINES = [
 # ============================================================
 # 3. FACILITY SAMPLING STRATEGY
 # ============================================================
-# Stratified sample: 20 HPs, 7 HCs, 3 Hospitals across 4 access tiers
+# Stratified sample: 50 facilities across 4 access tiers (same ratios as 200-facility plan)
 SAMPLING_PLAN = [
     # (type, access_tier, region_pool, count, catchment, lead_time_days_mean, lead_time_sd, sessions_per_week)
-    # URBAN  (30% of 200 = 60: 33 HP + 13 HC + 14 H)
-    ("Health Post",   "urban",        ["Addis Ababa", "Dire Dawa", "Harari"],                    33, 5000,   2, 0.5, 3),
-    ("Health Center", "urban",        ["Addis Ababa", "Dire Dawa"],                              13, 25000,  2, 0.5, 5),
-    ("Hospital",      "urban",        ["Addis Ababa", "Oromia"],                                 14, 150000, 1, 0.3, 5),
-    # RURAL ROAD  (40% of 200 = 80: 53 HP + 20 HC + 7 H)
-    ("Health Post",   "rural_road",   ["Amhara", "Oromia", "SNNP", "Sidama"],                   53, 5000,   4, 1.0, 2),
-    ("Health Center", "rural_road",   ["Amhara", "Oromia", "SNNP"],                             20, 25000,  4, 1.0, 3),
-    ("Hospital",      "rural_road",   ["Amhara"],                                                7, 150000, 3, 1.0, 5),
-    # RURAL REMOTE  (23.3% of 200 = 47: 34 HP + 13 HC)
-    ("Health Post",   "rural_remote", ["Tigray", "Benishangul Gumz", "Gambela", "South West Ethiopia"], 34, 5000, 8, 2.0, 1),
-    ("Health Center", "rural_remote", ["Tigray", "Benishangul Gumz"],                           13, 25000,  8, 2.0, 2),
-    # PASTORAL  (6.7% of 200 = 13: all HP)
-    ("Health Post",   "pastoral",     ["Somali", "Afar"],                                        13, 5000,  14, 4.0, 0.5),  # 0.5 = biweekly
+    # URBAN  (30% of 50 = 15: 8 HP + 3 HC + 4 H)
+    ("Health Post",   "urban",        ["Addis Ababa", "Dire Dawa", "Harari"],                     8, 5000,   2, 0.5, 3),
+    ("Health Center", "urban",        ["Addis Ababa", "Dire Dawa"],                               3, 25000,  2, 0.5, 5),
+    ("Hospital",      "urban",        ["Addis Ababa", "Oromia"],                                  4, 150000, 1, 0.3, 5),
+    # RURAL ROAD  (40% of 50 = 20: 13 HP + 5 HC + 2 H)
+    ("Health Post",   "rural_road",   ["Amhara", "Oromia", "SNNP", "Sidama"],                   13, 5000,   4, 1.0, 2),
+    ("Health Center", "rural_road",   ["Amhara", "Oromia", "SNNP"],                              5, 25000,  4, 1.0, 3),
+    ("Hospital",      "rural_road",   ["Amhara"],                                                 2, 150000, 3, 1.0, 5),
+    # RURAL REMOTE  (24% of 50 = 12: 9 HP + 3 HC)
+    ("Health Post",   "rural_remote", ["Tigray", "Benishangul Gumz", "Gambela", "South West Ethiopia"], 9, 5000, 8, 2.0, 1),
+    ("Health Center", "rural_remote", ["Tigray", "Benishangul Gumz"],                            3, 25000,  8, 2.0, 2),
+    # PASTORAL  (6% of 50 = 3: all HP)
+    ("Health Post",   "pastoral",     ["Somali", "Afar"],                                         3, 5000,  14, 4.0, 0.5),  # 0.5 = biweekly
 ]
 
 

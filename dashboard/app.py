@@ -621,8 +621,16 @@ elif view == "Facility Drill-Down":
     # ── Restock suggestion callout ───────────────────────────────────────────
     if tp and not fcast.empty:
         import math as _math
+        _BUFFER_BY_TIER = {
+            "Health Post":   {"urban": 2, "rural": 3, "pastoral": 6},
+            "Health Center": {"urban": 4, "rural": 5, "pastoral": 7},
+            "Hospital":      {"urban": 4, "rural": 5, "pastoral": 7},
+        }
+        _TIER_KEY = {"urban": "urban", "rural_road": "rural",
+                     "rural_remote": "rural", "pastoral": "pastoral"}
         _lt_weeks = lead_time / 7
-        _buf_weeks = 2 if sel_fac["type"] == "Health Post" else 7
+        _tier_key = _TIER_KEY.get(sel_fac.get("access_tier", ""), "rural")
+        _buf_weeks = _BUFFER_BY_TIER.get(sel_fac["type"], {}).get(_tier_key, 4)
         _target_stock = weekly_consumption * (_lt_weeks + _buf_weeks)
         _ens_fcast = fcast[fcast["model"] == "ensemble"].copy()
         if not _ens_fcast.empty:
