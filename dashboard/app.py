@@ -461,7 +461,7 @@ with st.sidebar:
     forecast_horizon = st.slider("Forecast Horizon (weeks)", 1, 8, 8)
 
     st.markdown('<div style="border-top: 1px solid rgba(255,255,255,0.08); margin: 1rem 0;"></div>', unsafe_allow_html=True)
-    st.caption("Data: synthetic · 30 facilities · 7 antigens · 7 years (364 weeks)")
+    st.caption("Data: synthetic · 50 facilities · 7 antigens · 7 years (364 weeks)")
 
 # Filter forecast_output based on sidebar selections
 def filter_forecast(fo):

@@ -121,7 +121,7 @@ def render_kpi_cards(
 
     # ── KPI 5: Resupply urgency score ────────────────────────────────────────
     # Raw score for the current forecast week
-    at_risk = ens_latest[ens_latest["alert_status"].isin(["critical", "warning"])].copy()
+    at_risk = ens_latest[ens_latest["alert_status"] == "warning"].copy()
     if not at_risk.empty:
         merged = at_risk.merge(
             facilities[["facility_id", "lead_time_days_mean", "target_infants_annual"]],

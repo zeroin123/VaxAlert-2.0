@@ -10,7 +10,7 @@ Applies counterfactual:
   Post-VaxAlert stockout rate = baseline * (1 - SDR)
   Children additionally vaccinated = children_missed * SDR
 
-Scales to Ethiopia's ~17,500 health facilities for the national headline.
+Scales to Ethiopia's 19,549 public/approved EPI facilities for the national headline.
 """
 
 import pandas as pd
@@ -21,8 +21,8 @@ from utils.db import get_connection
 # ── Constants ────────────────────────────────────────────────────────────────
 SIMULATION_YEARS      = 7
 SIMULATION_FACILITIES = 50
-ETHIOPIA_FACILITIES   = 17_500   # FMOH 2023 (HCs + HPs)
-SCALE_FACTOR          = ETHIOPIA_FACILITIES / SIMULATION_FACILITIES  # 350x
+ETHIOPIA_FACILITIES   = 19_549   # Public/approved EPI facilities: HPs 15,585 + HCs 3,604 + Hospitals 360 (FMOH facility registry)
+SCALE_FACTOR          = ETHIOPIA_FACILITIES / SIMULATION_FACILITIES  # 390.98x
 
 TIER_ORDER  = ["pastoral", "rural_remote", "rural_road", "urban"]
 TIER_LABELS = {
