@@ -27,9 +27,8 @@ Thumbs.db
 # Streamlit local secrets
 .streamlit/secrets.toml
 
-# Database backups
-data/*.db.bak*
-data/*.db.backup
+# Databases (generated — run vaxalert_sdg.py to recreate)
+*.db
 data/sdg_input/
 
 # Reference materials (large copyrighted textbook downloads)
