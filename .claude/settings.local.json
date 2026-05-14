@@ -1,9 +1,0 @@
-{
-  "permissions": {
-    "allow": [
-      "mcp__Bright_Data__scrape_as_markdown",
-      "Bash(python3 -c ' *)",
-      "mcp__Bright_Data__search_engine"
-    ]
-  }
-}

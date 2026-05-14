@@ -426,7 +426,7 @@ with st.sidebar:
     # ── Navigation ───────────────────────────────────────────
     view = st.radio(
         "Navigation",
-        ["National Overview", "Facility Drill-Down", "Cascade View", "Impact", "Model Performance"],
+        ["National Overview", "Facility Drill-Down", "Cascade View", "Model Performance"],
         label_visibility="collapsed",
     )
 
@@ -1081,10 +1081,3 @@ elif view == "Model Performance":
         )
         st.plotly_chart(fig_exp, use_container_width=True)
 
-# ════════════════════════════════════════════════════════════════════════════
-# VIEW 5: Impact
-# ════════════════════════════════════════════════════════════════════════════
-
-elif view == "Impact":
-    from dashboard.components.impact_simulator import render_impact_tab
-    render_impact_tab()
