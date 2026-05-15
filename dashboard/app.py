@@ -425,7 +425,7 @@ with st.sidebar:
     # ── Navigation ───────────────────────────────────────────
     view = st.radio(
         "Navigation",
-        ["National Overview", "Facility Drill-Down", "Cascade View", "Model Performance"],
+        ["National Overview", "Facility Drill-Down", "Cascade View", "Impact", "Model Performance"],
         label_visibility="collapsed",
     )
 
@@ -621,8 +621,9 @@ if view == "National Overview":
 # ════════════════════════════════════════════════════════════════════════════
 
 elif view == "Facility Drill-Down":
-    stock_ledger    = load_stock_ledger()
-    forecast_output = load_forecast_output()
+    stock_ledger       = load_stock_ledger()
+    forecast_output    = load_forecast_output()
+    model_metrics      = load_model_metrics()
     feature_importance = load_feature_importance()
 
     st.markdown("""
@@ -856,9 +857,20 @@ elif view == "Cascade View":
 # VIEW 4: Model Performance
 # ════════════════════════════════════════════════════════════════════════════
 
+elif view == "Impact":
+    st.markdown("""
+    <div class="page-header">
+        <h1>Solution Impact</h1>
+        <p>Quantified evidence of how VaxAlert reduces vaccine stockouts and improves child immunisation coverage.</p>
+    </div>
+    """, unsafe_allow_html=True)
+    from dashboard.components.impact_simulator import render_impact_tab
+    render_impact_tab()
+
 elif view == "Model Performance":
-    stock_ledger   = load_stock_ledger()
-    model_metrics  = load_model_metrics()
+    stock_ledger       = load_stock_ledger()
+    model_metrics      = load_model_metrics()
+    forecast_output    = load_forecast_output()
     feature_importance = load_feature_importance()
 
     st.markdown("""
