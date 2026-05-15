@@ -10,7 +10,7 @@ Applies counterfactual:
   Post-VaxAlert stockout rate = baseline * (1 - SDR)
   Children additionally vaccinated = children_missed * SDR
 
-Scales to Ethiopia's 19,549 public/approved EPI facilities for the national headline.
+Scales to Ethiopia's 19,668 public EPI facilities for the national headline.
 """
 
 import pandas as pd
@@ -21,8 +21,13 @@ from utils.db import get_connection
 # ── Constants ────────────────────────────────────────────────────────────────
 SIMULATION_YEARS      = 7
 SIMULATION_FACILITIES = 50
-ETHIOPIA_FACILITIES   = 19_549   # Public/approved EPI facilities: HPs 15,585 + HCs 3,604 + Hospitals 360 (FMOH facility registry)
-SCALE_FACTOR          = ETHIOPIA_FACILITIES / SIMULATION_FACILITIES  # 390.98x
+# Verified from Commonwealth Fund 2023 (citing MOH Ethiopia Fact Sheet + 2023/24 Annual Report):
+#   Health Posts: 17,569  |  Health Centers: 3,826  |  Hospitals: 404  |  Total: 21,799
+# Source: https://www.commonwealthfund.org/international-health-policy-center/countries/ethiopia
+# NOTE: The "40,000" figure often cited refers to Health Extension Workers (HEWs),
+# not health facilities.
+ETHIOPIA_FACILITIES   = 21_799
+SCALE_FACTOR          = ETHIOPIA_FACILITIES / SIMULATION_FACILITIES  # 436.0x
 
 TIER_ORDER  = ["pastoral", "rural_remote", "rural_road", "urban"]
 TIER_LABELS = {
