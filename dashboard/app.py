@@ -459,92 +459,16 @@ with st.sidebar:
 
     forecast_horizon = st.slider("Forecast Horizon (weeks)", 1, 8, 8)
 
-    confirm_consecutive = st.toggle(
-        "Confirm alerts (2+ weeks)",
-        value=True,
-        help=(
-            "Only surface an alert if the same facility-antigen pair is "
-            "critical/warning in at least 2 consecutive forecast weeks. "
-            "Filters out single-week Poisson noise spikes — especially "
-            "helpful for pastoral facilities with zero-inflated demand."
-        ),
-    )
-
     st.markdown('<div style="border-top: 1px solid rgba(255,255,255,0.08); margin: 1rem 0;"></div>', unsafe_allow_html=True)
     st.caption("Data: synthetic · 50 facilities · 7 antigens · 7 years (364 weeks)")
-
-# ── Consecutive-week confirmation filter ─────────────────────────────────────
-
-def apply_consecutive_confirmation(fo: pd.DataFrame, min_weeks: int = 2) -> pd.DataFrame:
-    """Display-layer FAR filter.
-
-    Keeps only facility-antigen pairs whose alert_status is critical or warning
-    in at least `min_weeks` *consecutive* forecast horizon weeks.  Single-week
-    spikes (Poisson noise in zero-inflated pastoral series) are suppressed
-    without any model retraining.  OK-status rows are always passed through
-    unchanged so the map and tables still show green facilities.
-
-    Example: if a pastoral HP is critical in week 1 but OK in week 2 → hidden.
-             If it is critical in weeks 1 AND 2 → confirmed, shown.
-    """
-    if fo.empty:
-        return fo
-
-    alerting = fo[fo["alert_status"].isin(["critical", "warning"])]
-    if alerting.empty:
-        return fo
-
-    alerting_sorted = alerting.sort_values(
-        ["facility_id", "antigen", "forecast_week"]
-    )
-
-    def _has_consecutive(grp):
-        weeks = sorted(grp["forecast_week"].values)
-        run = 1
-        for i in range(1, len(weeks)):
-            if weeks[i] == weeks[i - 1] + 1:
-                run += 1
-                if run >= min_weeks:
-                    return True
-            else:
-                run = 1
-        return run >= min_weeks
-
-    confirmed = (
-        alerting_sorted
-        .groupby(["facility_id", "antigen"])
-        .filter(_has_consecutive)
-        [["facility_id", "antigen"]]
-        .drop_duplicates()
-    )
-
-    if confirmed.empty:
-        # No pair passes confirmation — return only ok rows
-        return fo[fo["alert_status"] == "ok"]
-
-    confirmed_set = set(zip(confirmed["facility_id"], confirmed["antigen"]))
-    mask = fo.apply(
-        lambda r: r["alert_status"] == "ok"
-                  or (r["facility_id"], r["antigen"]) in confirmed_set,
-        axis=1,
-    )
-    return fo[mask]
-
 
 # Filter forecast_output based on sidebar selections
 def filter_forecast(fo):
     """Filter forecast_output by sidebar selections (antigen, tier, alert).
-
-    Consecutive-week confirmation is applied first (on the full 8-week
-    horizon) so single-week noise spikes are suppressed before the user's
-    alert-status / tier / antigen filters narrow the result further.
-    Horizon-week selection is handled inside each component."""
+    Horizon-week selection is handled inside each component, not here, so the
+    full 8-week forecast remains available for downstream lookups."""
     if fo.empty:
         return fo
-    # 1. Consecutive confirmation (uses full horizon — must come first)
-    if confirm_consecutive:
-        fo = apply_consecutive_confirmation(fo)
-    # 2. Sidebar antigen / tier / alert filters
     mask = (
         fo["antigen"].isin(selected_antigens) &
         fo["alert_status"].isin(selected_alert)
