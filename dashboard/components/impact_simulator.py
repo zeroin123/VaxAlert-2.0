@@ -117,14 +117,6 @@ def _load_data() -> dict:
 def render_impact_tab():
     """Render the full Impact tab."""
 
-    st.markdown("""
-    <div class="page-header">
-        <h1>National Impact</h1>
-        <p>Evidence-based projection of how VaxAlert reduces vaccine stockouts
-           and the number of children additionally reached at national scale.</p>
-    </div>
-    """, unsafe_allow_html=True)
-
     try:
         data = _load_data()
     except Exception as e:

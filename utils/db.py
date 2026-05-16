@@ -132,6 +132,34 @@ def write_feature_importance(df: pd.DataFrame):
         conn.close()
 
 
+def write_prophet_components(df: pd.DataFrame):
+    """Persist Prophet component decomposition for the 8-week forecast window.
+    df columns: facility_id, antigen, access_tier, forecast_week, forecast_date,
+                trend, seasonal, events, generated_at
+    """
+    import sqlite3 as _sqlite3
+    path = os.path.join(os.path.dirname(__file__), "..", "data", "vaxalert.db")
+    conn = _sqlite3.connect(path)
+    try:
+        df.to_sql("prophet_components", conn, if_exists="replace", index=False, chunksize=500)
+        conn.commit()
+    finally:
+        conn.close()
+
+
+def load_prophet_components() -> pd.DataFrame:
+    try:
+        with get_connection() as conn:
+            tables = [r[0] for r in conn.execute(
+                "SELECT name FROM sqlite_master WHERE type='table'"
+            ).fetchall()]
+            if "prophet_components" not in tables:
+                return pd.DataFrame()
+            return pd.read_sql("SELECT * FROM prophet_components", conn)
+    except Exception:
+        return pd.DataFrame()
+
+
 _MODEL_METRICS_COLS = [
     "facility_id", "antigen", "model", "fold",
     "mae", "rmse", "mape", "interval_coverage",

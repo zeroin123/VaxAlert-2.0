@@ -26,6 +26,7 @@ sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 from utils.db import (
     get_facilities, get_vaccines, get_stock_series,
     get_target_population, write_forecasts, get_connection,
+    write_prophet_components,
 )
 from utils.features import build_exog_features, build_exog_future
 from models.baseline import NaiveModel, HoltWintersModel
@@ -152,10 +153,10 @@ def _make_forecast_rows(
 
 
 def forecast_series(facility_id, antigen):
-    """Returns (forecast_rows, importance_series_or_none)."""
+    """Returns (forecast_rows, importance_series_or_none, prophet_comp_rows)."""
     series_full = get_stock_series(facility_id, antigen)
     if len(series_full) < TRAIN_END:
-        return [], None
+        return [], None, []
 
     tp = get_target_population(facility_id, antigen)
     weekly_ceiling = None
@@ -199,6 +200,7 @@ def forecast_series(facility_id, antigen):
 
     generated_at = datetime.utcnow().isoformat()
     all_rows = []
+    prophet_comp_rows = []
 
     # Naive
     nv = NaiveModel("last_value").fit(y_train)
@@ -255,10 +257,64 @@ def forecast_series(facility_id, antigen):
         with warnings.catch_warnings():
             warnings.simplefilter("ignore")
             if prophet_model._model:
-                p_fc = prophet_model._model.predict(future_ds)
-                p_yhat = np.maximum(0, p_fc["yhat"].values)
-                p_lower = np.maximum(0, p_fc["yhat_lower"].values)
-                p_upper = np.maximum(0, p_fc["yhat_upper"].values)
+                # Predict on ALL dates: 364 historical + 8 forecast in one call.
+                # This gives richer component data for the Model Performance heatmap
+                # while the per-facility Drill-Down still shows only the 8 forecast weeks.
+                all_ds = pd.concat(
+                    [train_ds[["ds"]], future_ds], ignore_index=True
+                )
+                all_fc = prophet_model._model.predict(all_ds)
+
+                # Forecast-period yhat / intervals (last FORECAST_HORIZON rows)
+                p_fc_slice = all_fc.iloc[TRAIN_END:]
+                p_yhat = np.maximum(0, p_fc_slice["yhat"].values)
+                p_lower = np.maximum(0, p_fc_slice["yhat_lower"].values)
+                p_upper = np.maximum(0, p_fc_slice["yhat_upper"].values)
+
+                # Component extraction for historical + forecast rows
+                try:
+                    _cols     = all_fc.columns.tolist()
+                    _n        = len(all_fc)
+                    _trend_a  = all_fc["trend"].values        if "trend"          in _cols else np.zeros(_n)
+                    _annual_a = all_fc["annual"].values       if "annual"         in _cols else np.zeros(_n)
+                    _addit_a  = all_fc["additive_terms"].values if "additive_terms" in _cols else np.zeros(_n)
+                    _events_a = _addit_a - _annual_a  # residual: campaigns, conflicts, pandemic
+
+                    hist_dates = dates_train.reset_index(drop=True)
+
+                    # Historical rows (week indices 0 … TRAIN_END-1)
+                    for i in range(TRAIN_END):
+                        prophet_comp_rows.append({
+                            "facility_id":   facility_id,
+                            "antigen":       antigen,
+                            "access_tier":   access_tier,
+                            "forecast_week": i,
+                            "forecast_date": hist_dates.iloc[i].strftime("%Y-%m-%d"),
+                            "trend":         round(float(_trend_a[i]),  4),
+                            "seasonal":      round(float(_annual_a[i]), 4),
+                            "events":        round(float(_events_a[i]), 4),
+                            "is_forecast":   0,
+                            "generated_at":  generated_at,
+                        })
+
+                    # Forecast rows (week indices FORECAST_START … FORECAST_START+7)
+                    for i in range(FORECAST_HORIZON):
+                        idx = TRAIN_END + i
+                        prophet_comp_rows.append({
+                            "facility_id":   facility_id,
+                            "antigen":       antigen,
+                            "access_tier":   access_tier,
+                            "forecast_week": FORECAST_START + i,
+                            "forecast_date": forecast_dates[i].strftime("%Y-%m-%d"),
+                            "trend":         round(float(_trend_a[idx]),  4),
+                            "seasonal":      round(float(_annual_a[idx]), 4),
+                            "events":        round(float(_events_a[idx]), 4),
+                            "is_forecast":   1,
+                            "generated_at":  generated_at,
+                        })
+                except Exception as _e:
+                    logger.warning("Prophet component extraction failed %s/%s: %s",
+                                   facility_id, antigen, _e)
             else:
                 p_yhat = np.zeros(FORECAST_HORIZON)
                 p_lower = np.zeros(FORECAST_HORIZON)
@@ -355,7 +411,7 @@ def forecast_series(facility_id, antigen):
             importance = xgb_model.feature_importance()
         except Exception:
             importance = None
-    return all_rows, importance
+    return all_rows, importance, prophet_comp_rows
 
 
 def main():
@@ -376,15 +432,18 @@ def main():
     with get_connection() as conn:
         conn.execute("DROP TABLE IF EXISTS forecast_output")
         conn.execute("DROP TABLE IF EXISTS feature_importance")
+        conn.execute("DROP TABLE IF EXISTS prophet_components")
         conn.commit()
 
     all_rows = []
+    all_comp_rows = []
     importance_records = {}  # facility_id -> list of pd.Series across antigens
 
     for idx, (fid, ant) in enumerate(pairs):
         try:
-            rows, importance = forecast_series(fid, ant)
+            rows, importance, comp_rows = forecast_series(fid, ant)
             all_rows.extend(rows)
+            all_comp_rows.extend(comp_rows)
             if importance is not None and len(importance) > 0:
                 importance_records.setdefault(fid, []).append(importance)
         except Exception as e:
@@ -398,6 +457,11 @@ def main():
         df = pd.DataFrame(all_rows)
         write_forecasts(df)
         print(f"\nWrote {len(df)} forecast rows to forecast_output table.")
+
+        if all_comp_rows:
+            comp_df = pd.DataFrame(all_comp_rows)
+            write_prophet_components(comp_df)
+            print(f"Wrote {len(comp_df)} Prophet component rows ({comp_df['facility_id'].nunique()} facilities × {comp_df['antigen'].nunique()} antigens × 8 weeks).")
 
         ens_rows = df[df["model"] == "ensemble"]
         critical = (ens_rows["alert_status"] == "critical").sum()

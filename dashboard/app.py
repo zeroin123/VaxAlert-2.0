@@ -363,6 +363,11 @@ def load_feature_importance():
         return pd.read_sql("SELECT * FROM feature_importance", conn)
 
 @st.cache_data(ttl=300)
+def load_prophet_components() -> pd.DataFrame:
+    from utils.db import load_prophet_components as _load
+    return _load()
+
+@st.cache_data(ttl=300)
 def load_ensemble_weights() -> dict:
     """Load both weight sets from the JSON sidecar written by StackingEnsemble.save()."""
     import json as _json
@@ -545,10 +550,10 @@ if view == "National Overview":
 # ════════════════════════════════════════════════════════════════════════════
 
 elif view == "Facility Drill-Down":
-    stock_ledger       = load_stock_ledger()
-    forecast_output    = load_forecast_output()
-    model_metrics      = load_model_metrics()
-    feature_importance = load_feature_importance()
+    stock_ledger        = load_stock_ledger()
+    forecast_output     = load_forecast_output()
+    model_metrics       = load_model_metrics()
+    prophet_components  = load_prophet_components()
 
     st.markdown("""
     <div class="page-header">
@@ -667,12 +672,11 @@ elif view == "Facility Drill-Down":
                     f"({_target_stock:.0f} doses). No emergency order needed."
                 )
 
-    # ── Per-facility feature importance ──────────────────────────────────────
-    if not feature_importance.empty:
-        st.markdown('<div class="section-card">', unsafe_allow_html=True)
-        from dashboard.components.feature_importance_panel import render_feature_importance_panel
-        render_feature_importance_panel(sel_fid, sel_fac["name"], feature_importance)
-        st.markdown('</div>', unsafe_allow_html=True)
+    # ── Per-facility Prophet component decomposition ─────────────────────────
+    st.markdown('<div class="section-card">', unsafe_allow_html=True)
+    from dashboard.components.feature_importance_panel import render_prophet_decomposition_panel
+    render_prophet_decomposition_panel(sel_fid, sel_ant, sel_fac["name"], prophet_components)
+    st.markdown('</div>', unsafe_allow_html=True)
 
     # ── Delivery timeline ────────────────────────────────────────────────────
     st.markdown('<div class="section-card">', unsafe_allow_html=True)
@@ -792,10 +796,10 @@ elif view == "Impact":
     render_impact_tab()
 
 elif view == "Model Performance":
-    stock_ledger       = load_stock_ledger()
-    model_metrics      = load_model_metrics()
-    forecast_output    = load_forecast_output()
-    feature_importance = load_feature_importance()
+    stock_ledger        = load_stock_ledger()
+    model_metrics       = load_model_metrics()
+    forecast_output     = load_forecast_output()
+    prophet_components  = load_prophet_components()
 
     st.markdown("""
     <div class="page-header">
@@ -958,50 +962,9 @@ elif view == "Model Performance":
             )
             st.plotly_chart(fig_sdr, use_container_width=True)
 
-        # ── Tier × Feature Importance Heatmap ─────────────────────────────────
-        if not feature_importance.empty:
-            st.subheader("Feature Importance × Access Tier (XGBoost)")
-            st.caption(
-                "Mean XGBoost feature importance per access tier. "
-                "Tells you which signals matter most where - pastoral facilities tend to "
-                "depend on supply-chain features; urban facilities tend to depend on seasonality."
-            )
-
-            from dashboard.components.feature_importance_panel import PRETTY_NAMES
-            fi_tier = feature_importance.merge(
-                facilities[["facility_id", "access_tier"]], on="facility_id", how="left"
-            )
-            # Top-10 features overall
-            top_feats = (fi_tier.groupby("feature")["importance"].mean()
-                         .sort_values(ascending=False).head(10).index.tolist())
-            sub = fi_tier[fi_tier["feature"].isin(top_feats)]
-            pivot = (sub.groupby(["feature", "access_tier"])["importance"].mean()
-                     .reset_index()
-                     .pivot(index="feature", columns="access_tier", values="importance")
-                     .fillna(0)
-                     .reindex(top_feats))
-            tier_order = ["urban", "rural_road", "rural_remote", "pastoral"]
-            pivot = pivot.reindex(columns=[t for t in tier_order if t in pivot.columns])
-            y_labels = [PRETTY_NAMES.get(f, f) for f in pivot.index]
-
-            fig_heat = go.Figure(go.Heatmap(
-                z=pivot.values,
-                x=list(pivot.columns),
-                y=y_labels,
-                colorscale="Viridis",
-                colorbar=dict(title="Mean<br>importance"),
-                hovertemplate="<b>%{y}</b><br>Tier: %{x}<br>Importance: %{z:.4f}<extra></extra>",
-            ))
-            fig_heat.update_layout(
-                height=420,
-                margin=dict(l=240, r=40, t=20, b=40),
-                xaxis_title="Access tier",
-                yaxis_title=None,
-                plot_bgcolor="#ffffff",
-                paper_bgcolor="#ffffff",
-                font=dict(color="#1a202c"),
-            )
-            st.plotly_chart(fig_heat, use_container_width=True)
+        # ── Prophet Component × Access Tier Heatmap ──────────────────────────
+        from dashboard.components.feature_importance_panel import render_component_tier_heatmap
+        render_component_tier_heatmap(prophet_components)
 
         # ── Individual series explorer ───────────────────────────────────────
         st.subheader("Individual Series Explorer")
